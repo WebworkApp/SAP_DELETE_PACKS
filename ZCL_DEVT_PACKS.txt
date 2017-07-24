@@ -1,0 +1,385 @@
+class ZCL_DEVT_PACKS definition
+  public
+  final
+  create public .
+
+public section.
+
+  methods START_OF_SELECTION
+    importing
+      !IR_PACKS type PACKRANGE .
+protected section.
+PRIVATE SECTION.
+
+  TYPES:
+    BEGIN OF ty_s_tadir,
+      status     TYPE icon_d,
+      pgmid      TYPE pgmid,
+      object     TYPE trobjtype,
+      obj_name   TYPE sobj_name,
+      srcsystem  TYPE srcsystem,
+      author     TYPE author,
+      srcdep     TYPE repair,
+      devclass   TYPE devclass,
+      genflag    TYPE genflag,
+      delflag    TYPE objdelflag,
+      created_on TYPE creationdt,
+    END OF ty_s_tadir .
+  TYPES:
+    ty_t_tadir TYPE STANDARD TABLE OF ty_s_tadir WITH KEY status pgmid object obj_name.
+
+  DATA gt_tadir TYPE ty_t_tadir .
+  DATA go_tadir TYPE REF TO cl_salv_table .
+
+  METHODS check_pack_object .
+  METHODS delete_objects .
+  METHODS delete_package .
+  METHODS display_objects
+    RAISING
+      cx_salv_not_found
+      cx_salv_msg .
+  METHODS select_pack_object
+    IMPORTING
+      value(ir_packs) TYPE packrange .
+  METHODS on_double_click
+    FOR EVENT double_click OF cl_salv_events_table
+    IMPORTING
+      !row
+      !column .
+  METHODS on_added_function
+    FOR EVENT added_function OF cl_salv_events_table
+    IMPORTING
+      !e_salv_function .
+ENDCLASS.
+
+
+
+CLASS ZCL_DEVT_PACKS IMPLEMENTATION.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_DEVT_PACKS->CHECK_PACK_OBJECT
+* +-------------------------------------------------------------------------------------------------+
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+METHOD check_pack_object.
+
+  DATA:
+    exist,
+    obj_name TYPE trobj_name.
+
+  FIELD-SYMBOLS <s_tadir> LIKE LINE OF gt_tadir.
+
+  LOOP AT gt_tadir ASSIGNING <s_tadir> WHERE object <> 'DEVC'.
+    obj_name = <s_tadir>-obj_name.
+
+    CLEAR exist.
+    CALL FUNCTION 'TR_CHECK_EXIST'
+      EXPORTING
+        iv_pgmid             = <s_tadir>-pgmid
+        iv_object            = <s_tadir>-object
+        iv_obj_name          = obj_name
+      IMPORTING
+        e_exist              = exist
+      EXCEPTIONS
+        tr_no_check_function = 1
+        OTHERS               = 2.
+
+    IF sy-subrc IS INITIAL.
+      IF exist IS INITIAL.
+        <s_tadir>-status = icon_led_green.
+      ELSE.
+        <s_tadir>-status = icon_led_red.
+      ENDIF.
+    ELSE.
+      <s_tadir>-status = icon_led_yellow.
+    ENDIF.
+  ENDLOOP.
+
+ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_DEVT_PACKS->DELETE_OBJECTS
+* +-------------------------------------------------------------------------------------------------+
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+METHOD delete_objects.
+
+  CONSTANTS c_operation TYPE seu_action VALUE 'DELETE'.
+
+  DATA t_findstrings TYPE STANDARD TABLE OF string.
+
+  DATA:
+    hits         TYPE sytabix,
+    find_obj_cls TYPE seu_obj.
+
+  FIELD-SYMBOLS <s_tadir> LIKE LINE OF gt_tadir.
+
+  LOOP AT gt_tadir ASSIGNING <s_tadir> WHERE object <> 'DEVC'.
+    CLEAR: hits, t_findstrings.
+
+    SELECT SINGLE type FROM euobj
+      INTO find_obj_cls
+     WHERE id = <s_tadir>-object.
+
+    APPEND <s_tadir>-obj_name TO t_findstrings.
+
+    CALL FUNCTION 'RS_EU_CROSSREF'
+      EXPORTING
+        i_find_obj_cls           = find_obj_cls
+        no_dialog                = abap_true
+      IMPORTING
+        o_hits                   = hits
+      TABLES
+        i_findstrings            = t_findstrings
+      EXCEPTIONS
+        not_executed             = 1
+        not_found                = 2
+        illegal_object           = 3
+        no_cross_for_this_object = 4
+        batch                    = 5
+        batchjob_error           = 6
+        wrong_type               = 7
+        object_not_exist         = 8
+        OTHERS                   = 9.
+
+    IF hits IS INITIAL.
+      CALL FUNCTION 'RS_TOOL_ACCESS'
+        EXPORTING
+          operation           = c_operation
+          object_name         = <s_tadir>-obj_name
+          object_type         = <s_tadir>-object
+        EXCEPTIONS
+          not_executed        = 1
+          invalid_object_type = 2
+          OTHERS              = 3.
+
+*      IF sy-subrc IS NOT INITIAL.
+*        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+*      ENDIF.
+    ENDIF.
+  ENDLOOP.
+
+ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_DEVT_PACKS->DELETE_PACKAGE
+* +-------------------------------------------------------------------------------------------------+
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+method DELETE_PACKAGE.
+
+*TR_MAINTAIN_DEVCLASS
+endmethod.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_DEVT_PACKS->DISPLAY_OBJECTS
+* +-------------------------------------------------------------------------------------------------+
+* | [!CX!] CX_SALV_NOT_FOUND
+* | [!CX!] CX_SALV_MSG
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+METHOD display_objects.
+
+  DATA:
+    o_columns      TYPE REF TO cl_salv_columns_table,
+    o_column       TYPE REF TO cl_salv_column_table,
+    o_display      TYPE REF TO cl_salv_display_settings,
+    o_layout       TYPE REF TO cl_salv_layout,
+    o_selections   TYPE REF TO cl_salv_selections,
+    o_events       TYPE REF TO cl_salv_events_table,
+    o_aggregations TYPE REF TO cl_salv_aggregations.
+
+  DATA:
+    t_column_ref TYPE salv_t_column_ref,
+    s_column_ref TYPE salv_s_column_ref,
+    s_key        TYPE salv_s_layout_key.
+
+  DATA:
+    title   TYPE lvc_title,
+    lines_c TYPE string.
+
+*------------------------------------------------- Start ALV control -->
+  cl_salv_table=>factory( IMPORTING r_salv_table = go_tadir
+                           CHANGING t_table      = gt_tadir ).
+
+*---------- Set Functions ----------*
+  go_tadir->set_screen_status( pfstatus      = 'STANDARD'
+                               report        = sy-cprog
+                               set_functions = cl_salv_model_base=>c_functions_all ).
+
+*---------- Set selections ----------*
+  o_selections = go_tadir->get_selections( ).
+  o_selections->set_selection_mode( if_salv_c_selection_mode=>multiple ).
+
+*------------------------------------------------------- Set Display -->
+  o_display = go_tadir->get_display_settings( ).
+  o_display->set_striped_pattern( abap_true ).
+
+*------------------------------------------------------- Set Columns -->
+  o_columns = go_tadir->get_columns( ).
+  o_columns->set_key_fixation( ).
+  o_columns->set_optimize( abap_true ).
+  t_column_ref = o_columns->get( ).
+
+  LOOP AT t_column_ref INTO s_column_ref.
+    o_column ?= o_columns->get_column( s_column_ref-columnname ).
+    o_column->set_f4( if_salv_c_bool_sap=>false ).
+    o_column->set_alignment( if_salv_c_alignment=>centered ).
+
+    CASE s_column_ref-columnname.
+      WHEN 'STATUS' OR 'PGMID' OR 'OBJECT'.
+        o_column->set_key( abap_true ).
+
+      WHEN 'OBJ_NAME'.
+        o_column->set_key( abap_true ).
+        o_column->set_alignment( if_salv_c_alignment=>left ).
+    ENDCASE.
+  ENDLOOP.
+
+*------------------------------------------------------- Set Events -->
+  o_events = go_tadir->get_event( ).
+  SET HANDLER on_double_click   FOR o_events.
+  SET HANDLER on_added_function FOR o_events.
+
+*------------------------------------------------------- Display log -->
+  go_tadir->display( ).
+
+ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_DEVT_PACKS->ON_ADDED_FUNCTION
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] E_SALV_FUNCTION                LIKE
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+METHOD ON_ADDED_FUNCTION.
+
+  DATA answer.
+
+  CASE e_salv_function.
+    WHEN 'DELETE'.
+      CALL FUNCTION 'POPUP_TO_CONFIRM'
+        EXPORTING
+          text_question  = 'Delete objects'
+        IMPORTING
+          answer         = answer
+        EXCEPTIONS
+          text_not_found = 1
+          OTHERS         = 2.
+
+      IF answer = '1'.
+        delete_objects( ).
+        delete_package( ).
+      ENDIF.
+  ENDCASE.
+
+ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_DEVT_PACKS->ON_DOUBLE_CLICK
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] ROW                            LIKE
+* | [--->] COLUMN                         LIKE
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+METHOD on_double_click.
+
+  DATA object_name TYPE sobj_name.
+
+  FIELD-SYMBOLS <s_tadir> LIKE LINE OF gt_tadir.
+
+  READ TABLE gt_tadir ASSIGNING <s_tadir> INDEX row.
+
+  CASE column.
+    WHEN 'PGMID' OR 'OBJECT' OR 'OBJ_NAME'.
+      zcl_3f_fa_ui_tools=>display_object( i_object_name = <s_tadir>-obj_name
+                                          i_object_type = <s_tadir>-object ).
+
+    WHEN 'AUTHOR'.
+      CALL FUNCTION 'SUSR_ZBV_CALL_SU01D'
+        EXPORTING
+          username         = <s_tadir>-author
+        EXCEPTIONS
+          no_authorisation = 1
+          OTHERS           = 2.
+
+      IF sy-subrc IS NOT INITIAL.
+      ENDIF.
+
+    WHEN 'DEVCLASS'.
+      object_name = <s_tadir>-devclass.
+      zcl_3f_fa_ui_tools=>display_object( i_object_name = object_name
+                                          i_object_type = 'DEVC' ).
+  ENDCASE.
+
+ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Private Method ZCL_DEVT_PACKS->SELECT_PACK_OBJECT
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IR_PACKS                       TYPE        PACKRANGE
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+METHOD select_pack_object.
+
+  DATA:
+   t_tdevc TYPE TABLE OF tdevc,
+   r_packs TYPE packrange,
+   s_packs LIKE LINE OF r_packs.
+
+  FIELD-SYMBOLS <s_tdevc> LIKE LINE OF t_tdevc.
+
+  r_packs = ir_packs.
+
+  DO.
+    CLEAR t_tdevc.
+    SELECT * FROM tdevc
+     APPENDING TABLE t_tdevc
+     WHERE parentcl IN r_packs.
+
+    CLEAR r_packs.
+    LOOP AT t_tdevc ASSIGNING <s_tdevc>.
+      s_packs     = 'IEQ'.
+      s_packs-low = <s_tdevc>-devclass.
+      APPEND s_packs TO r_packs.
+    ENDLOOP.
+
+    APPEND LINES OF r_packs TO ir_packs.
+
+    IF r_packs IS INITIAL.
+      EXIT.
+    ENDIF.
+  ENDDO.
+
+  SELECT pgmid object obj_name srcsystem author srcdep devclass genflag delflag created_on
+    FROM tadir
+    INTO CORRESPONDING FIELDS OF TABLE gt_tadir
+   WHERE devclass IN ir_packs.
+
+ENDMETHOD.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Instance Public Method ZCL_DEVT_PACKS->START_OF_SELECTION
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] IR_PACKS                       TYPE        PACKRANGE
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+METHOD START_OF_SELECTION.
+
+  DATA o_exp TYPE REF TO cx_root.
+
+  TRY.
+*---------------------------------------------------- Select objects -->
+      select_pack_object( ir_packs ).
+
+*----------------------------------------------------- Check objects -->
+      check_pack_object( ).
+
+*--------------------------------------------------- Display objects -->
+      display_objects( ).
+
+    CATCH cx_salv_msg cx_salv_not_found INTO o_exp.
+  ENDTRY.
+
+ENDMETHOD.
+ENDCLASS.
