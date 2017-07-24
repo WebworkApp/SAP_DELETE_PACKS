@@ -1,0 +1,23 @@
+REPORT zzs_devt_packs MESSAGE-ID 00.
+*-----------------------------------------------------------------------
+* Created by NM for Packages Handling
+*-----------------------------------------------------------------------
+
+TABLES tdevc.
+
+DATA g_class TYPE REF TO zcl_devt_packs.
+
+*--------------------------------------------- Report Inicialization -->
+INITIALIZATION.
+  CREATE OBJECT g_class.
+
+*-------------------------------------------------- Selection Screen -->
+*--------------------------------------------------- Package selection *
+  SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE text-b01.
+  SELECTION-SCREEN SKIP 1.
+  SELECT-OPTIONS so_pack FOR tdevc-devclass OBLIGATORY DEFAULT 'ZNM_TEST'.
+  SELECTION-SCREEN END OF BLOCK b01.
+
+*-------------------------------------- Data Selection and Treatment -->
+START-OF-SELECTION.
+  g_class->start_of_selection( so_pack[] ).
